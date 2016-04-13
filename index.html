@@ -1,4 +1,3 @@
-<!DOCTYPE html>
 <html>
   <head>
     <meta charset="utf-8">
@@ -7,9 +6,195 @@
     <script src="https://cdn.mxpnl.com/libs/mixpanel-platform/build/mixpanel-platform.v0.latest.min.js"></script>
   </head>
   <body class="mixpanel-platform-body">
-    <h1>Hello, World!</h1>
+  	<script id='query'>
+		function getStartDate(from_date) {
+			var parts = from_date.split('-');
+			return new Date(parts[0], Number(parts[1] - 1), parts[2]).valueOf();
+		}
+
+		function getEndDate(to_date) {
+			var parts = to_date.split('-');
+			return new Date(parts[0], Number(parts[1] - 1), parts[2]).valueOf() + 86400000;
+		}
+
+		function getBeginningOfBucket(epoch) {
+		    var start = getStartDate(params.from_date)
+		    var bucketNum = Math.floor((epoch - start) / params.retention_interval);
+		    return new Date(start + (bucketNum * params.retention_interval)).valueOf();
+		}
+
+		function toDate(epoch) {
+			var d = new Date(epoch);
+			return d.getFullYear() + '-' + (d.getMonth() < 9 ? ('0' + (d.getMonth() + 1)) : (d.getMonth() + 1)) + '-' + (d.getDate() < 10 ? ('0' + d.getDate()) : d.getDate());
+		}
+
+		function main() {
+		  return Events({
+		    from_date: params.from_date,
+		    to_date: params.to_date,
+		    event_selectors: [{event: params.start_event}, {event: params.retention_event}]
+		  })
+		  .groupByUser(function(state, events) {
+		      state = state || {retention: {}};
+		      var date, diff;
+		      for (i = 0; i < events.length; i++) {
+		          date = getBeginningOfBucket(events[i].time);
+		          if (events[i].name == params.start_event && !state.startEpoch) {
+		              state.startEpoch = date;
+		          }
+		          else if (events[i].name == params.retention_event && state.startEpoch) {
+		              diff = (date - state.startEpoch) / params.retention_interval;
+		              if (params.retention_buckets.indexOf(diff) != -1) {
+		                  state.retention[diff] = 1;
+		              }
+		          }
+		      }
+		      if (state.startEpoch) {
+		          for (i = 0; i < params.retention_buckets.length; i++) {
+		          	  if (state.startEpoch + (params.retention_buckets[i] * params.retention_interval) > getEndDate(params.to_date)) {
+		          	  	  state.retention[params.retention_buckets[i]] = 2;
+		          	  }
+		          	  else if (!state.retention[params.retention_buckets[i]]) {
+		          	  	  state.retention[params.retention_buckets[i]] = 0;
+		          	  }
+		          }
+		      }
+		      return state;
+		  })
+		  .filter(function(item) {return item.value.startEpoch})
+		  .groupBy([function(item) {return item.value.startEpoch}], function(accums, items) {
+		    var res = {};
+		    var i = 0;
+		    var j = 0;
+		    var index = 0;
+		    for (i = 0; i < params.retention_buckets.length; i++) {
+		        index = params.retention_buckets[i].toString();
+		        res[index] = {};
+		        res[index].converted = 0;
+		        res[index].total = 0;
+		        for (j = 0; j < items.length; j++) {
+		            if (items[j].value.retention[index] == 1) {
+		            	res[index].converted++;
+		            	res[index].total++;
+		            }
+		            else if (items[j].value.retention[index] === 0) {
+		            	res[index].total++;
+		            }
+		        }
+		        for (j = 0; j < accums.length; j++) {
+		            res[index].converted += accums[j][index].converted;
+		            res[index].total += accums[j][index].total;
+		        }
+		    }
+		    return res;
+		  })
+		  .reduce(function(accums, items) {
+		  	  var data = {};
+		  	  var item, index;
+		  	  for (var i = 0; i < accums.length; i++) {
+		  	  	  for (var key in accums[i]) {
+		  	  	  	data[key] = accums[i][key];
+		  	  	  }
+		  	  }
+		  	  for (i = 0; i < items.length; i++) {
+		  	  	  for (var j = 0; j < params.retention_buckets.length; j++) {
+		  	  	  	index = 'bucket #' + params.retention_buckets[j];
+		  	  	  	if (!data[index]) {
+		  	  	  		data[index] = {};
+		  	  	  	}
+		  	  	  	item = items[i].value[params.retention_buckets[j]];
+		  	  	  	if (item.total > 0) {
+		  	  	  		data[index][toDate(items[i].key[0])] = Math.round(10000 * item.converted / item.total) / 100; 
+		  	  	  	}
+		  	  	  }
+		  	  }
+		  	  return data;
+		  })
+		}
+    </script>
+  	<div class="mixpanel-platform-section">
+  		<div style="display:flex;justify-content:center;align-items:center;width:100%;">Retention (Gaming Style)</div>
+  		<div style="clear: both;"></div>
+  	</div>
+  	<div class="mixpanel-platform-section">
+      <div id="dateSelect" style="float: left;"></div>
+      <div id="retention" style="float: right;"></div>
+      <div id="retentionEvent" style="float: right;">Retention Event:</div>
+      <div id="start" style="float: right;"></div>
+      <div id="startEvent" style="float: right;">Start Event:</div>
+      <div style="clear: both;"></div>
+    </div>
+    <div class="mixpanel-platform-section">
+      <div style="float: left">Retention Interval:</div>
+      <div id="interval" style="float: left;"></div>
+      <div style="float: left">Buckets:</div>
+      <input id="buckets" type="text" style="float: left;" value="0,1,7,14,30">
+      <div style="clear: both;"></div>
+    </div>
+    <div id="chart"></div>
     <script>
-      // Run queries and display results here
+		var script = document.getElementById('query').innerHTML;
+		var eventChart = $('#chart').MPChart({
+		 chartType: 'line'
+		});
+		var dateSelect = $('#dateSelect').MPDatepicker();
+		var startEvent = $('#start').MPEventSelect();
+		var retentionEvent = $('#retention').MPEventSelect();
+		var retentionInterval = $('#interval').MPSelect({
+		 items: [{
+		     label: '1',
+		     value: 1
+		 }, {
+		     label: '7',
+		     value: 7
+		 }, {
+		     label: '14',
+		     value: 14
+		 }, {
+		     label: '30',
+		     value: 30
+		 }]
+		});
+		retentionInterval.val(1);
+		function runQuery() {
+		 var from_date = dateSelect.MPDatepicker('value').from.toISOString().slice(0, -14);
+		 var to_date = dateSelect.MPDatepicker('value').to.toISOString().slice(0, -14);
+		 var start = startEvent.MPEventSelect('value');
+		 var retention = retentionEvent.MPEventSelect('value');
+		 var interval = retentionInterval.MPSelect('value') * 86400000;
+		 var bucketText = document.getElementById('buckets').value.split(',');
+		 var buckets = [];
+		 for (var i = 0; i < bucketText.length; i++) {
+		 	buckets.push(Number(bucketText[i].replace(/\s+/g, '')));
+		 }
+		 var params = {
+		     'from_date': from_date,
+		     'to_date': to_date,
+		     'start_event': start,
+		     'retention_event': retention,
+		     'retention_interval': interval,
+		     'retention_buckets': buckets
+		 };
+		 MP.api.custom_query(script, params).done(function(results) {
+		 	console.log(results);
+		 	if (results[0]) {
+		 		eventChart.MPChart('setData', results[0]);
+		 	}
+		 });
+		}
+		runQuery();
+		dateSelect.on('change', function() {
+		 runQuery();
+		});
+		startEvent.on('change', function(e, selection) {
+		 runQuery();
+		});
+		retentionEvent.on('change', function(e, selection) {
+		 runQuery();
+		});
+		retentionInterval.on('change', function(e, selection) {
+		 runQuery();
+		});
     </script>
   </body>
 </html>
